@@ -1,7 +1,7 @@
 name: Generate CBOM from Keycloak Container
 
 on:
-  workflow_dispatch: # 支援在 GitHub 介面手動點擊執行
+  workflow_dispatch:
   push:
     branches: [ main ]
 
@@ -13,33 +13,45 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install CBOMKit CLI
+        run: |
+          # 透過 Go 直接編譯安裝 CBOMKit
+          go install github.com/IBM/cbomkit-cli@latest || go install github.com/CBOMKit/cbomkit@latest || true
+          
+          # 將 Go 二進位路徑加入系統 PATH
+          echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
       - name: Pull and Extract Keycloak Container Filesystem
         run: |
           IMAGE_NAME="quay.io/keycloak/keycloak:latest"
           echo "Pulling $IMAGE_NAME..."
           docker pull $IMAGE_NAME
           
-          # 建立不啟動的容器並匯出 Root Filesystem
           CONTAINER_ID=$(docker create $IMAGE_NAME)
           mkdir -p target-rootfs
           docker export $CONTAINER_ID | tar -xf - -C target-rootfs
           docker rm $CONTAINER_ID
-          echo "Container filesystem successfully extracted to ./target-rootfs"
-
-      - name: Set up CBOMKit Scanner
-        run: |
-          # 下載並安裝 CBOMKit CLI (若使用官方 binary/pip，依發行套件調整)
-          # 範例以直接拉取 CBOMKit 或 Python 工具為例：
-          pip install --upgrade pip
-          pip install cbomkit || true
-          
-          # 建立放置產出檔案的資料夾
-          mkdir -p cbom-output
+          echo "Container filesystem extracted successfully."
 
       - name: Run CBOMKit Scan
         run: |
-          # 執行掃描並輸出 CycloneDX / JSON 格式的 CBOM
-          cbomkit scan ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+          mkdir -p cbom-output
+          
+          # 若 cbomkit-cli 指令存在則執行，若指令名為 cbomkit 亦可相容
+          if command -v cbomkit-cli &> /dev/null; then
+            cbomkit-cli generate --path ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+          elif command -v cbomkit &> /dev/null; then
+            cbomkit scan ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+          else
+            # 備用方案：若為 Docker 官方映像檔形式
+            docker run --rm -v $(pwd)/target-rootfs:/scan -v $(pwd)/cbom-output:/out \
+              ghcr.io/ibm/cbomkit:latest generate --path /scan --output /out/keycloak-cbom.json
+          fi
 
       - name: Upload CBOM Artifact
         uses: actions/upload-artifact@v4
