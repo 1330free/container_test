@@ -1,0 +1,49 @@
+name: Generate CBOM from Keycloak Container
+
+on:
+  workflow_dispatch: # 支援在 GitHub 介面手動點擊執行
+  push:
+    branches: [ main ]
+
+jobs:
+  scan-container-cbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Pull and Extract Keycloak Container Filesystem
+        run: |
+          IMAGE_NAME="quay.io/keycloak/keycloak:latest"
+          echo "Pulling $IMAGE_NAME..."
+          docker pull $IMAGE_NAME
+          
+          # 建立不啟動的容器並匯出 Root Filesystem
+          CONTAINER_ID=$(docker create $IMAGE_NAME)
+          mkdir -p target-rootfs
+          docker export $CONTAINER_ID | tar -xf - -C target-rootfs
+          docker rm $CONTAINER_ID
+          echo "Container filesystem successfully extracted to ./target-rootfs"
+
+      - name: Set up CBOMKit Scanner
+        run: |
+          # 下載並安裝 CBOMKit CLI (若使用官方 binary/pip，依發行套件調整)
+          # 範例以直接拉取 CBOMKit 或 Python 工具為例：
+          pip install --upgrade pip
+          pip install cbomkit || true
+          
+          # 建立放置產出檔案的資料夾
+          mkdir -p cbom-output
+
+      - name: Run CBOMKit Scan
+        run: |
+          # 執行掃描並輸出 CycloneDX / JSON 格式的 CBOM
+          cbomkit scan ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+
+      - name: Upload CBOM Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: keycloak-cbom-report
+          path: ./cbom-output/keycloak-cbom.json
+          retention-days: 14
