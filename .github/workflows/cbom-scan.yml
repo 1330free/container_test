@@ -18,38 +18,40 @@ jobs:
         with:
           go-version: '1.22'
 
-      - name: Install CBOMKit CLI
+      - name: Install CBOMkit-theia
         run: |
-          go install github.com/IBM/cbomkit-cli@latest || true
+          echo "正在安裝容器專用掃描工具 CBOMkit-theia..."
+          # 安裝 PQCA 官方維護的 theia 掃描器
+          go install github.com/cbomkit/cbomkit-theia@latest || go install github.com/PQCA/cbomkit-theia@latest
+          
+          # 將 Go 工具路徑加入環境變數
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
-      - name: Extract Keycloak Filesystem (No Database Needed)
-        run: |
-          IMAGE_NAME="quay.io/keycloak/keycloak:latest"
-          echo "拉取映像檔..."
-          docker pull $IMAGE_NAME
-          
-          # 使用 create 建立靜態容器 (不要使用 docker run 或 docker start)
-          CONTAINER_ID=$(docker create $IMAGE_NAME)
-          
-          # 匯出 rootfs 到本機目錄
-          mkdir -p target-rootfs
-          docker export $CONTAINER_ID | tar -xf - -C target-rootfs
-          docker rm $CONTAINER_ID
-          echo "已成功匯出檔案系統，略過資料庫啟動。"
-
-      - name: Run CBOMKit Scan
+      - name: Run Native Image Scan
         run: |
           mkdir -p cbom-output
-          # 執行掃描
-          cbomkit-cli generate --path ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+          IMAGE_NAME="quay.io/keycloak/keycloak:latest"
+          
+          echo "拉取容器映像檔: $IMAGE_NAME"
+          docker pull $IMAGE_NAME
+          
+          echo "執行 CBOMkit-theia 掃描..."
+          # Theia 支援直接傳入 image 名稱進行靜態解析，無需匯出 rootfs
+          # 將標準輸出導向 JSON，並隔離錯誤日誌
+          cbomkit-theia image $IMAGE_NAME > ./cbom-output/keycloak-cbom.json 2> scan_error.log
+          
+          # 若工具預設生成了其他的 json 檔案，則將其移至輸出目錄
+          if [ ! -s "./cbom-output/keycloak-cbom.json" ] && ls *.json 1> /dev/null 2>&1; then
+            mv *.json ./cbom-output/keycloak-cbom.json
+          fi
 
       - name: Validate CBOM
         run: |
           if [ -s "./cbom-output/keycloak-cbom.json" ]; then
-            echo "✅ CBOM 產出成功！大小：$(du -h ./cbom-output/keycloak-cbom.json | cut -f1)"
+            echo "✅ CBOM 產出成功！檔案大小：$(du -h ./cbom-output/keycloak-cbom.json | cut -f1)"
           else
-            echo "❌ 產出失敗或檔案為空"
+            echo "❌ 產出失敗或檔案為空，請檢查 scan_error.log"
+            cat scan_error.log
             exit 1
           fi
 
