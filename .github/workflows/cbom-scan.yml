@@ -20,37 +20,37 @@ jobs:
 
       - name: Install CBOMKit CLI
         run: |
-          # 透過 Go 直接編譯安裝 CBOMKit
-          go install github.com/IBM/cbomkit-cli@latest || go install github.com/CBOMKit/cbomkit@latest || true
-          
-          # 將 Go 二進位路徑加入系統 PATH
+          go install github.com/IBM/cbomkit-cli@latest || true
           echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
 
-      - name: Pull and Extract Keycloak Container Filesystem
+      - name: Extract Keycloak Filesystem (No Database Needed)
         run: |
           IMAGE_NAME="quay.io/keycloak/keycloak:latest"
-          echo "Pulling $IMAGE_NAME..."
+          echo "拉取映像檔..."
           docker pull $IMAGE_NAME
           
+          # 使用 create 建立靜態容器 (不要使用 docker run 或 docker start)
           CONTAINER_ID=$(docker create $IMAGE_NAME)
+          
+          # 匯出 rootfs 到本機目錄
           mkdir -p target-rootfs
           docker export $CONTAINER_ID | tar -xf - -C target-rootfs
           docker rm $CONTAINER_ID
-          echo "Container filesystem extracted successfully."
+          echo "已成功匯出檔案系統，略過資料庫啟動。"
 
       - name: Run CBOMKit Scan
         run: |
           mkdir -p cbom-output
-          
-          # 若 cbomkit-cli 指令存在則執行，若指令名為 cbomkit 亦可相容
-          if command -v cbomkit-cli &> /dev/null; then
-            cbomkit-cli generate --path ./target-rootfs --output ./cbom-output/keycloak-cbom.json
-          elif command -v cbomkit &> /dev/null; then
-            cbomkit scan ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+          # 執行掃描
+          cbomkit-cli generate --path ./target-rootfs --output ./cbom-output/keycloak-cbom.json
+
+      - name: Validate CBOM
+        run: |
+          if [ -s "./cbom-output/keycloak-cbom.json" ]; then
+            echo "✅ CBOM 產出成功！大小：$(du -h ./cbom-output/keycloak-cbom.json | cut -f1)"
           else
-            # 備用方案：若為 Docker 官方映像檔形式
-            docker run --rm -v $(pwd)/target-rootfs:/scan -v $(pwd)/cbom-output:/out \
-              ghcr.io/ibm/cbomkit:latest generate --path /scan --output /out/keycloak-cbom.json
+            echo "❌ 產出失敗或檔案為空"
+            exit 1
           fi
 
       - name: Upload CBOM Artifact
